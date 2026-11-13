@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>Harness</title>
+</head>
+<body>
+<input id="q" value="用三句话解释什么是 Agent" size="50">
+<button id="send">发送</button>
+<pre id="out"></pre>
+
+<script>
+    const q = document.getElementById("q");
+    const out = document.getElementById("out");
+
+    document.getElementById("send").onclick = async () => {
+    out.textContent = "";
+    const resp = await
+fetch(`/chat/stream?q=${encodeURIComponent(q.value)}`);
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        out.textContent += decoder.decode(value, { stream: true });
+    }
+    };
+</script>
+</body>
+</html>
