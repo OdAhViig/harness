@@ -8,7 +8,10 @@ import json
 
 import pytest
 
-from app.tools import list_file, read_file
+from app import permissions
+from app import tools
+from app.permissions import confirm_write
+from app.tools import list_file, read_file, write_file
 
 
 def test_list_file_ok():
@@ -28,3 +31,39 @@ def test_read_file_missing():
     """不存在的文件：返回明确错误，而不是抛 FileNotFoundError 让调用方猜。"""
     with pytest.raises(ValueError, match="不存在"):
         read_file("no_such_file.txt")
+
+
+def test_write_file_ok(tmp_path, monkeypatch):
+    """正常写入：把 permissions.ROOT 指到临时目录，写完再读回来。
+
+    参数 tmp_path 和 monkeypatch 都是 pytest 自动注入的 fixture，不用手写。
+    """
+    monkeypatch.setattr(permissions, "ROOT", tmp_path)
+    monkeypatch.setattr(tools, "ROOT", tmp_path)
+    write_file("note.txt", "hello")
+    assert read_file("note.txt") == "hello"
+
+
+def test_write_out_of_root():
+    """越界写入：不能写到项目根目录之外。"""
+    with pytest.raises(PermissionError, match="越界"):
+        write_file("../hack.txt", "x")
+
+
+def test_write_sensitive(tmp_path, monkeypatch):
+    """敏感路径：.env 里是 API key，模型不能碰。"""
+    monkeypatch.setattr(permissions, "ROOT", tmp_path)
+    with pytest.raises(PermissionError, match="敏感"):
+        write_file(".env", "SECRET=1")
+
+
+def test_confirm_write(monkeypatch):
+    """人工确认：y 放行，n 拒绝。"""
+    def fake_input(path) -> str:
+        return "y"
+    monkeypatch.setattr(permissions, "write_input", fake_input)
+    assert confirm_write("", "")
+    monkeypatch.setattr(permissions, "write_input", lambda _: "n")
+    assert confirm_write("", "") is False
+    # TODO 8：monkeypatch 替换 builtins.input，
+    # 先返回 "y" 断言 confirm_write(...) is True，再返回 "n" 断言 is False。

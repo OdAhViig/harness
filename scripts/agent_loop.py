@@ -5,12 +5,16 @@
 
 import json
 from app.llm import client
+from app.permissions import confirm_write, ensure_safe_path
 from app.tools import TOOL_SCHEMAS, TOOLS
 
 MODEL = "deepseek-flash"
 
 # 一次用户请求内最多允许的模型调用轮数。简单查询 3–5 足够，20 步任务给 20–25。
 MAX_STEPS = 8
+
+# 有副作用的工具：执行前必须过人工确认。
+WRITE_TOOLS = {"write_file"}
 
 SYSTEM_PROMPT = "你是项目内的助手。需要信息时调用工具，不要编造。"
 
@@ -55,7 +59,16 @@ def run_tool(call):
         return error
 
     try:
-        result = TOOLS[name](**args)
+        ensure_safe_path(args["path"])
+        if name == "write_file":
+            if confirm_write(**args):
+                result = TOOLS[name](**args)
+            else:
+                result = "用户拒绝写入（人工确认未通过），未做任何修改"
+        else:
+            result = TOOLS[name](**args)
+    except PermissionError as e:
+        result = f"错误：{e}"
     except ValueError as e:
         result = f"错误：{e}"
     except KeyError as e:
@@ -91,7 +104,7 @@ if __name__ == "__main__":
         {"role": "system", "content": SYSTEM_PROMPT},
         {
             "role": "user",
-            "content": "先列出项目根目录，再读 pyproject.toml，用一句话说明这个项目依赖哪些库",
+            "content": "读取 README.md，在末尾追加一行 `<!-- write_file 验收 -->`，保持原有内容不变，然后写回 README.md",
         },
     ]
     run_agent(messages)
