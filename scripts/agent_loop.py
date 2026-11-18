@@ -17,7 +17,7 @@ MODEL = "deepseek-flash"
 # 每条用户提问独立计数：一次 run_agent 内最多 ask 多少次（= 最多产生几条 assistant 消息）。
 # 一次 ask 只算一步，即使它带回多个 tool_calls；工具调用数不受这个值直接限制。
 # 同一条提问 --resume 时接着累计，不重置。简单查询 3–5 足够，20 步任务给 20–25。
-MAX_STEPS = 8
+MAX_STEPS = 20
 
 # 有副作用的工具：执行前必须过人工确认。
 WRITE_TOOLS = {"write_file"}
@@ -117,6 +117,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--resume", type=Path, help="从已有 JSONL 日志恢复")
     parser.add_argument("--log", type=Path, help="新会话日志路径")
+    parser.add_argument("--task", help="新会话的用户消息；不传则用内置验收任务")
     args = parser.parse_args()
 
     if args.resume:
@@ -132,7 +133,7 @@ def main():
     else:
         path = args.log or new_log_path()
         log = EventLog(path)
-        user = "读取 README.md，在末尾追加一行 `<!-- write_file 验收 -->`，保持原有内容不变，然后写回 README.md"
+        user = args.task or "读取 README.md，在末尾追加一行 `<!-- write_file 验收 -->`，保持原有内容不变，然后写回 README.md"
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user},
