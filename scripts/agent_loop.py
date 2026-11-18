@@ -11,6 +11,7 @@ from app.events import EventLog, messages_from, new_log_path, pending_tool_calls
 from app.llm import client
 from app.permissions import confirm_write, ensure_safe_path
 from app.tools import TOOL_SCHEMAS, TOOLS
+from app.context import trim_messages, estimate_messages_tokens, CONTEXT_BUDGET
 
 MODEL = "deepseek-flash"
 
@@ -94,7 +95,13 @@ def run_agent(messages, log, steps=0):
             log.append({"type": "limit", "steps": steps})
             return
         steps += 1
-        resp = ask(messages)
+        msg_tokens = estimate_messages_tokens(messages)
+        trimed_msgs = None
+        if msg_tokens > CONTEXT_BUDGET:
+            trimed_msgs = trim_messages(messages)
+            trimed_msg_tokens = estimate_messages_tokens(trimed_msgs)
+            log.append({"type": "context", "before": msg_tokens, "after": trimed_msg_tokens})
+        resp = ask(trimed_msgs if trimed_msgs is not None else messages)
         msg = resp.choices[0].message
         record = to_message(msg)
         messages.append(record)
