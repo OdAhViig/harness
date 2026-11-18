@@ -3,14 +3,20 @@
 和 loop_once.py 的区别：loop_once 只硬编码了两轮；这里用 while 跑到模型自己停下来。
 """
 
+import argparse
 import json
+from pathlib import Path
+
+from app.events import EventLog, messages_from, new_log_path, pending_tool_calls
 from app.llm import client
 from app.permissions import confirm_write, ensure_safe_path
 from app.tools import TOOL_SCHEMAS, TOOLS
 
 MODEL = "deepseek-flash"
 
-# 一次用户请求内最多允许的模型调用轮数。简单查询 3–5 足够，20 步任务给 20–25。
+# 每条用户提问独立计数：一次 run_agent 内最多 ask 多少次（= 最多产生几条 assistant 消息）。
+# 一次 ask 只算一步，即使它带回多个 tool_calls；工具调用数不受这个值直接限制。
+# 同一条提问 --resume 时接着累计，不重置。简单查询 3–5 足够，20 步任务给 20–25。
 MAX_STEPS = 8
 
 # 有副作用的工具：执行前必须过人工确认。
@@ -80,31 +86,67 @@ def run_tool(call):
     return str(result)
 
 
-def run_agent(messages):
-    """主循环：反复问模型、执行工具、回填，直到拿到最终回答或用完步数。"""
-    steps = 0
+def run_agent(messages, log, steps=0):
+    """主循环。steps 是这条用户提问已用的 ask 次数；> 0 表示从日志恢复，预算接着累计。"""
     while 1:
         if steps >= MAX_STEPS:
-            print(f"超过最大循环次数{MAX_STEPS}")
+            print(f"超过模型调用上限（MAX_STEPS={MAX_STEPS}），停止")
+            log.append({"type": "limit", "steps": steps})
             return
         steps += 1
         resp = ask(messages)
         msg = resp.choices[0].message
-        messages.append(to_message(msg))
+        record = to_message(msg)
+        messages.append(record)
+        event = {"type": "assistant", "content": record["content"]}
+        if record.get("tool_calls"):
+            event["tool_calls"] = record["tool_calls"]
+        log.append(event)
         if msg.tool_calls:
             for call in msg.tool_calls:
                 res = run_tool(call)
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": res})
+                log.append({"type": "tool", "name": call.function.name, "tool_call_id": call.id, "content": res})
         else:
             print(f"{msg.content}")
+            log.append({"type": "done", "steps": steps})
             return
 
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--resume", type=Path, help="从已有 JSONL 日志恢复")
+    parser.add_argument("--log", type=Path, help="新会话日志路径")
+    args = parser.parse_args()
+
+    if args.resume:
+        log = EventLog(args.resume)
+        events = EventLog.load(args.resume)
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + messages_from(events)
+        waitingCalls = pending_tool_calls(messages)
+        for call in waitingCalls:
+            messages.append({"role": "tool", "tool_call_id": call["id"], "content": "上次执行被中断，结果未知。不要重复执行有副作用的操作。"})
+            log.append({"type": "tool", "name": call["function"]["name"], "tool_call_id": call["id"], "content": "上次执行被中断，结果未知。不要重复执行有副作用的操作。"})
+        steps = len([msg for msg in messages if msg["role"] == "assistant"])
+        print(f"[恢复] {args.resume}：{len(events)} 条事件，已完成 {steps} 步")
+    else:
+        path = args.log or new_log_path()
+        log = EventLog(path)
+        user = "读取 README.md，在末尾追加一行 `<!-- write_file 验收 -->`，保持原有内容不变，然后写回 README.md"
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user},
+        ]
+        log.append({"type": "user", "content": user})
+        steps = 0
+        print(f"[日志] {path}")
+
+    try:
+        run_agent(messages, log, steps)
+    except KeyboardInterrupt:
+        log.append({"type": "interrupted"})
+        print(f"\n已中断。恢复：.venv/bin/python -m scripts.agent_loop --resume {log.path}")
+
+
 if __name__ == "__main__":
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {
-            "role": "user",
-            "content": "读取 README.md，在末尾追加一行 `<!-- write_file 验收 -->`，保持原有内容不变，然后写回 README.md",
-        },
-    ]
-    run_agent(messages)
+    main()
