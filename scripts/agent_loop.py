@@ -10,7 +10,7 @@ from pathlib import Path
 from app.events import EventLog, messages_from, new_log_path, pending_tool_calls
 from app.llm import client
 from app.permissions import confirm_write, ensure_safe_path
-from app.tools import TOOL_SCHEMAS, TOOLS
+from app.tools import PATH_TOOLS, TOOL_SCHEMAS, TOOLS
 from app.context import trim_messages, estimate_messages_tokens, CONTEXT_BUDGET
 
 MODEL = "deepseek-flash"
@@ -23,7 +23,10 @@ MAX_STEPS = 20
 # 有副作用的工具：执行前必须过人工确认。
 WRITE_TOOLS = {"write_file"}
 
-SYSTEM_PROMPT = "你是项目内的助手。需要信息时调用工具，不要编造。"
+SYSTEM_PROMPT = (
+    "你是项目内的助手。需要信息时调用工具，不要编造。"
+    "回答文档内容时先调用 search_docs，并在答案中标注来源（path:start_line）。"
+)
 
 
 def ask(messages):
@@ -66,7 +69,8 @@ def run_tool(call):
         return error
 
     try:
-        ensure_safe_path(args["path"])
+        if name in PATH_TOOLS:
+            ensure_safe_path(args["path"])
         if name == "write_file":
             if confirm_write(**args):
                 result = TOOLS[name](**args)
